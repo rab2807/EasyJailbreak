@@ -9,9 +9,10 @@ import warnings
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import functools
 import torch
-from fastchat.conversation import get_conv_template
+from fastchat.conversation import get_conv_template, Conversation
 from typing import Optional, Dict, List, Any
 import logging
+
 
 class HuggingfaceModel(WhiteBoxModelBase):
     """
@@ -45,16 +46,41 @@ class HuggingfaceModel(WhiteBoxModelBase):
         try:
             self.conversation = get_conv_template(model_name)
         except KeyError:
-            logging.error(f'Invalid model_name: {model_name}. Refer to '
-                          'https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py '
-                          'for possible options and templates.')
-            raise  # Continue raising the KeyError
+            # llama-3 integration
+            if model_name == 'llama-3':
+                self.conversation = Conversation(
+                    name="llama-3",
+                    system_template="<|start_header_id|>system<|end_header_id|>\n\n{system_message}<|eot_id|>",
+                    roles=("user", "assistant"),
+                    sep="",
+                    stop_str="<|eot_id|>",
+                    stop_token_ids=[128001, 128009],
+                )
+
+                system_prompt = self.conversation.system_template.format(
+                    system_message=self.system_message)
+
+                self.conversation.get_prompt = lambda self: (
+                    "<|begin_of_text|>"
+                    + (system_prompt if self.system_message else "")
+                    + "".join(
+                        f"<|start_header_id|>{role}<|end_header_id|>\n\n{message.strip()}<|eot_id|>"
+                        if message else f"<|start_header_id|>{role}<|end_header_id|>\n\n"
+                        for role, message in self.messages
+                    )
+                )
+            else:
+                logging.error(f'Invalid model_name: {model_name}. Refer to '
+                              'https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py '
+                              'for possible options and templates.')
+                raise  # Continue raising the KeyError
 
         if model_name == 'llama-2':
             self.conversation.sep2 = self.conversation.sep2.strip()
 
         if model_name == 'zero_shot':
-            self.conversation.roles = tuple(['### ' + r for r in self.conversation.template.roles])
+            self.conversation.roles = tuple(
+                ['### ' + r for r in self.conversation.template.roles])
             self.conversation.sep = '\n'
 
         self.format_str = self.create_format_str()
@@ -74,8 +100,10 @@ class HuggingfaceModel(WhiteBoxModelBase):
 
     def create_format_str(self):
         self.conversation.messages = []
-        self.conversation.append_message(self.conversation.roles[0], "{prompt}")
-        self.conversation.append_message(self.conversation.roles[1], "{response}")
+        self.conversation.append_message(
+            self.conversation.roles[0], "{prompt}")
+        self.conversation.append_message(
+            self.conversation.roles[1], "{response}")
         format_str = self.conversation.get_prompt()
         self.conversation.messages = []  # clear history
         return format_str
@@ -94,7 +122,8 @@ class HuggingfaceModel(WhiteBoxModelBase):
         if isinstance(messages, str):
             messages = [messages]
         for index, message in enumerate(messages):
-            self.conversation.append_message(self.conversation.roles[index % 2], message)
+            self.conversation.append_message(
+                self.conversation.roles[index % 2], message)
         self.conversation.append_message(self.conversation.roles[-1], None)
         return self.conversation.get_prompt()
 
@@ -116,7 +145,8 @@ class HuggingfaceModel(WhiteBoxModelBase):
         """
         if isinstance(messages, str):
             messages = [messages]
-        prompt = self.create_conversation_prompt(messages, clear_old_history=clear_old_history)
+        prompt = self.create_conversation_prompt(
+            messages, clear_old_history=clear_old_history)
 
         input_ids = self.tokenizer(prompt,
                                    return_tensors='pt',
@@ -125,11 +155,12 @@ class HuggingfaceModel(WhiteBoxModelBase):
 
         kwargs.update({input_field_name: input_ids})
         output_ids = self.model.generate(**kwargs, **self.generation_config)
-        output = self.tokenizer.decode(output_ids[0][input_length:], skip_special_tokens=True)
+        output = self.tokenizer.decode(
+            output_ids[0][input_length:], skip_special_tokens=True)
 
         return output
 
-    def batch_generate(self, conversations, **kwargs)-> List[str]:
+    def batch_generate(self, conversations, **kwargs) -> List[str]:
         r"""
         Generates responses for a batch of conversations.
 
@@ -151,7 +182,8 @@ class HuggingfaceModel(WhiteBoxModelBase):
                                    return_tensors='pt',
                                    padding=True,
                                    add_special_tokens=False)
-        input_ids = {k: v.to(self.model.device.index) for k, v in input_ids.items()}
+        input_ids = {k: v.to(self.model.device.index)
+                     for k, v in input_ids.items()}
         kwargs.update(**input_ids)
         output_ids = self.model.generate(**kwargs, **self.generation_config)
         if not self.model.config.is_encoder_decoder:
@@ -180,14 +212,15 @@ class HuggingfaceModel(WhiteBoxModelBase):
     def batch_encode(self, *args, **kwargs):
         return self.tokenizer(*args, **kwargs)
 
-    def batch_decode(self, *args, **kwargs)-> List[str]:
+    def batch_decode(self, *args, **kwargs) -> List[str]:
         return self.tokenizer.batch_decode(*args, **kwargs)
 
     def format(self, **kwargs):
         return self.format_str.format(**kwargs)
 
     def format_instance(self, query, jailbreak_prompt, response):
-        prompt = jailbreak_prompt.replace('{query}', query) # 之所以不用str.format方法，是因为jailbreak_prompt可能是任意字符串，其中可能包含{...}，而str.format不支持忽略未提供的key
+        # 之所以不用str.format方法，是因为jailbreak_prompt可能是任意字符串，其中可能包含{...}，而str.format不支持忽略未提供的key
+        prompt = jailbreak_prompt.replace('{query}', query)
         return self.format(prompt=prompt, response=response)
 
     @property
@@ -211,7 +244,7 @@ class HuggingfaceModel(WhiteBoxModelBase):
         return self.tokenizer.pad_token_id
 
     @property
-    #@functools.cache  # 记忆结果，避免重复计算。不影响子类的重载。
+    # @functools.cache  # 记忆结果，避免重复计算。不影响子类的重载。
     def embed_layer(self) -> Optional[torch.nn.Embedding]:
         """
         Retrieve the embedding layer object of the model.
@@ -232,7 +265,7 @@ class HuggingfaceModel(WhiteBoxModelBase):
         return None
 
     @property
-    #@functools.cache
+    # @functools.cache
     def vocab_size(self) -> int:
         """
         Get the vocabulary size.
@@ -278,10 +311,12 @@ def from_pretrained(model_name_or_path: str, model_name: str, tokenizer_name_or_
     """
     if dtype is None:
         dtype = 'auto'
-    model = AutoModelForCausalLM.from_pretrained(model_name_or_path, device_map='auto', trust_remote_code=True, low_cpu_mem_usage=True, torch_dtype=dtype).eval()
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name_or_path, device_map='auto', trust_remote_code=True, low_cpu_mem_usage=True, torch_dtype=dtype).eval()
     if tokenizer_name_or_path is None:
         tokenizer_name_or_path = model_name_or_path
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_name_or_path, trust_remote_code=True)
 
     if tokenizer.padding_side is None:
         tokenizer.padding_side = 'right'
