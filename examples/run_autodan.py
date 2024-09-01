@@ -7,11 +7,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 sys.path.append(os.getcwd())
 
-# 加载model和tokenizer，作为target模型
+# model_path = 'lmsys/vicuna-13b-v1.5'
+# model_name = 'vicuna_v1.1'
 model_path = 'meta-llama/Llama-2-7b-chat-hf'
+model_name = 'llama-2'
 model = AutoModelForCausalLM.from_pretrained(model_path)
 tokenizers = AutoTokenizer.from_pretrained(model_path)
-target_model = models.HuggingfaceModel(model, tokenizers, 'llama-2')
+target_model = models.HuggingfaceModel(model, tokenizers, model_name)
 
 model_path = 'meta-llama/Meta-Llama-3-8B-Instruct'
 model = AutoModelForCausalLM.from_pretrained(model_path)
